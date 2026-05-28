@@ -25,10 +25,16 @@ def create_server(settings: Settings) -> FastMCP:
     from esp_workspace_mcp.tools import search as search_tools
     from esp_workspace_mcp.tools import serial_tools as serial
     from esp_workspace_mcp.tools import diagnostics as diag
+    from esp_workspace_mcp.tools.session_tools import SessionManager
     from esp_workspace_mcp.utils.process import JobManager
 
     job_mgr = JobManager(ttl_seconds=settings.MCP_JOB_TTL_SECONDS)
+    session_mgr = SessionManager(ttl_seconds=7200)
     roots = settings.allowed_roots
+
+    # Helper to get active sessions dict
+    def get_sessions():
+        return session_mgr.get_all()
 
     # ================================================================
     # Filesystem Tools
@@ -116,31 +122,40 @@ def create_server(settings: Settings) -> FastMCP:
     # ================================================================
 
     @mcp.tool()
-    def run_command(cmd: str, cwd: str = "", timeout: int = 30) -> str:
+    def run_command(cmd: str, cwd: str = "", timeout: int = 30, session_id: str = "") -> str:
         """Execute a shell command and wait for completion.
 
         Args:
             cmd: Shell command to execute
             cwd: Working directory (optional, must be within allowed roots)
             timeout: Maximum execution time in seconds (max 300)
+            session_id: Optional session ID to inherit working directory
         """
         result = shell_tools.execute_command(
             cmd, roots, cwd=cwd,
             timeout=timeout, max_timeout=settings.MCP_MAX_TIMEOUT,
             output_limit=settings.MCP_OUTPUT_LIMIT,
+            session_id=session_id,
+            sessions=get_sessions(),
         )
         return shell_tools.format_result(result)
 
     @mcp.tool()
-    def start_process(cmd: str, cwd: str = "") -> str:
+    def start_process(cmd: str, cwd: str = "", session_id: str = "") -> str:
         """Start a background process and return its job ID.
 
         Args:
             cmd: Shell command to execute
             cwd: Working directory (optional)
+            session_id: Optional session ID to inherit working directory
         """
+        effective_cwd = cwd
+        if session_id:
+            s = session_mgr.get_session(session_id)
+            if s:
+                effective_cwd = s.get('working_dir', cwd)
         result = shell_tools.execute_command(
-            cmd, roots, cwd=cwd,
+            cmd, roots, cwd=effective_cwd,
             job_mgr=job_mgr, background=True,
         )
         return shell_tools.format_result(result)
@@ -159,7 +174,7 @@ def create_server(settings: Settings) -> FastMCP:
             return f"Error: {result['error']}"
 
         lines = [
-            f"Job: {result['id']} | Status: {result['status']} | Lines: {result['total_lines']}",
+            f"Job: {result['job_id']} | Status: {result['status']} | Lines: {result['total_lines']}",
             f"Cmd: {result['cmd']}",
         ]
         if result['output']:
@@ -195,6 +210,28 @@ def create_server(settings: Settings) -> FastMCP:
         for j in jobs:
             lines.append(f"{j['id']:<10} {j['status']:<12} {j.get('output_lines', 0):>6} {j['cmd']}")
 
+        return '\n'.join(lines)
+
+    @mcp.tool()
+    def wait_for_job(job_id: str, timeout: float = 60) -> str:
+        """Wait for a background job to complete.
+
+        Args:
+            job_id: Job identifier from start_process
+            timeout: Maximum seconds to wait (default: 60)
+        """
+        result = job_mgr.wait_for_job(job_id, timeout)
+        if 'error' in result:
+            return f"Error: {result['error']}"
+        
+        lines = [
+            f"Job: {result.get('job_id', job_id)}",
+            f"Status: {result.get('status', 'unknown')}",
+            f"Return code: {result.get('return_code', 'N/A')}",
+            f"Message: {result.get('message', '')}",
+        ]
+        if 'output_lines' in result:
+            lines.append(f"Output lines: {result['output_lines']}")
         return '\n'.join(lines)
 
     # ================================================================
@@ -244,7 +281,7 @@ def create_server(settings: Settings) -> FastMCP:
     def set_target(project_dir: str, target: str, wish_product: str = "") -> str:
         """Set the ESP-IDF target chip (esp32, esp32s3, esp32c6, etc.).
 
-        Only needed once per project — the target is persisted in sdkconfig.
+        Only needed once per project -- the target is persisted in sdkconfig.
 
         Args:
             project_dir: Absolute path to the ESP-IDF project
@@ -297,6 +334,49 @@ def create_server(settings: Settings) -> FastMCP:
             wish_product: Target hardware product (required for proper sdkconfig generation)
         """
         return eim_run("reconfigure", project_dir, wish_product, timeout=120)
+
+    @mcp.tool()
+    def parse_build_output(output: str) -> str:
+        """Parse build output into structured errors and warnings.
+
+        Takes raw build output text and returns a JSON structure with
+        arrays of errors and warnings, each with file, line, message info.
+
+        Args:
+            output: Raw build text (e.g. from a previous build_project or eim_run)
+        """
+        return idf_tools.parse_build_output(output)
+
+    @mcp.tool()
+    def idf_size(project_dir: str, wish_product: str = "") -> str:
+        """Run idf.py size and return memory usage breakdown.
+
+        Args:
+            project_dir: Absolute path to the ESP-IDF project
+            wish_product: Target hardware product
+        """
+        return idf_tools.idf_size(
+            project_dir, roots,
+            wish_product=wish_product or settings.MCP_WISH_PRODUCT,
+            eim_path=settings.MCP_EIM_PATH,
+        )
+
+    @mcp.tool()
+    def idf_sdkconfig(project_dir: str, wish_product: str = "") -> str:
+        """Export sdkconfig as structured data.
+
+        Reads the project's sdkconfig file and returns all configuration
+        key-value pairs. If sdkconfig doesn't exist, runs reconfigure first.
+
+        Args:
+            project_dir: Absolute path to the ESP-IDF project
+            wish_product: Target hardware product
+        """
+        return idf_tools.idf_sdkconfig(
+            project_dir, roots,
+            wish_product=wish_product or settings.MCP_WISH_PRODUCT,
+            eim_path=settings.MCP_EIM_PATH,
+        )
 
     # ================================================================
     # Git Tools  (Phase 2)
@@ -482,12 +562,70 @@ def create_server(settings: Settings) -> FastMCP:
         return diag.get_connected_devices(roots)
 
     # ================================================================
+    # Session Tools  (Phase 3)
+    # ================================================================
+
+    @mcp.tool()
+    def create_session(session_id: str, working_dir: str = "") -> str:
+        """Create a persistent working session.
+
+        Sessions maintain a working directory that tools like run_command
+        and start_process can inherit via the session_id parameter.
+
+        Args:
+            session_id: Unique identifier for the session
+            working_dir: Optional absolute path to use as default working directory
+        """
+        result = session_mgr.create_session(session_id, working_dir)
+        if 'error' in result:
+            return f"Error: {result['error']}"
+        
+        lines = [
+            f"Session: {result['session_id']}",
+            f"Status: {result['status']}",
+        ]
+        if result.get('working_dir'):
+            lines.append(f"Working dir: {result['working_dir']}")
+        return '\n'.join(lines)
+
+    @mcp.tool()
+    def destroy_session(session_id: str) -> str:
+        """Destroy a persistent session and clean up resources.
+
+        Args:
+            session_id: Session to destroy
+        """
+        result = session_mgr.destroy_session(session_id)
+        if 'error' in result:
+            return f"Error: {result['error']}"
+        return f"Session {session_id} destroyed"
+
+    @mcp.tool()
+    def list_sessions() -> str:
+        """List all active sessions with their status."""
+        sessions = session_mgr.list_sessions()
+        if not sessions:
+            return "No active sessions"
+
+        lines = [f"Sessions: {len(sessions)} active\n"]
+        lines.append(f"{'ID':<20} {'STATUS':<10} {'WORKING DIR':<40} {'IDLE(s)':>8}")
+        lines.append("-" * 80)
+
+        for s in sessions:
+            lines.append(
+                f"{s['session_id']:<20} {s['status']:<10} "
+                f"{s['working_dir']:<40} {s['idle_seconds']:>8}"
+            )
+
+        return '\n'.join(lines)
+
+    # ================================================================
     # Resources
     # ================================================================
 
     @mcp.resource("project://status")
     def get_project_status() -> str:
-        """Get current project configuration (stub — returns server status)."""
+        """Get current project configuration (stub -- returns server status)."""
         import json
         return json.dumps({
             'server': 'esp-workspace-mcp',
