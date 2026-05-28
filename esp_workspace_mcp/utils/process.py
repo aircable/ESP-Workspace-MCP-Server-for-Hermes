@@ -58,6 +58,18 @@ class JobManager:
         self.jobs: Dict[str, dict] = {}
         self.ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
+        # Start cleanup thread
+        self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self._cleanup_thread.start()
+    
+    def _cleanup_loop(self):
+        """Background thread that periodically cleans up expired jobs."""
+        while True:
+            time.sleep(60)  # Run every minute
+            try:
+                self.cleanup_expired()
+            except Exception:
+                pass
     
     def start_job(self, cmd: list, cwd: str, env: dict, label: str = "") -> str:
         """Start a background job. Returns job_id."""
@@ -136,6 +148,48 @@ class JobManager:
                 'output': ''.join(selected),
             }
             return result
+    
+    def wait_for_job(self, job_id: str, timeout: float = 60) -> dict:
+        """Wait for a background job to complete.
+        
+        Args:
+            job_id: Job identifier returned by start_process
+            timeout: Maximum seconds to wait (default: 60)
+            
+        Returns:
+            dict with job completion status
+        """
+        deadline = time.time() + timeout
+        poll_interval = 0.5
+        
+        while time.time() < deadline:
+            with self._lock:
+                job = self.jobs.get(job_id)
+                if not job:
+                    return {'error': f'Job not found: {job_id}'}
+                
+                if job['status'] in ('completed', 'failed', 'killed'):
+                    return {
+                        'job_id': job_id,
+                        'status': job['status'],
+                        'return_code': job['return_code'],
+                        'cmd': job['cmd'],
+                        'output_lines': len(job['stdout_lines']) + len(job['stderr_lines']),
+                        'message': f"Job {job_id} finished with status: {job['status']}",
+                    }
+            
+            time.sleep(poll_interval)
+        
+        with self._lock:
+            job = self.jobs.get(job_id)
+            if job:
+                return {
+                    'job_id': job_id,
+                    'status': 'timeout',
+                    'current_status': job['status'],
+                    'message': f"Timeout waiting for job {job_id} after {timeout}s",
+                }
+            return {'error': f'Job not found: {job_id}'}
     
     def kill_job(self, job_id: str) -> dict:
         """Terminate a running job."""

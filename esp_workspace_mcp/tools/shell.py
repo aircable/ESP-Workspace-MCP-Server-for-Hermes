@@ -1,5 +1,5 @@
 """Shell / process MCP tools: command execution."""
-from typing import List
+from typing import List, Optional
 
 from esp_workspace_mcp.utils.security import validate_cwd, sanitize_env
 from esp_workspace_mcp.utils.process import run_subprocess
@@ -12,9 +12,11 @@ def execute_command(
     timeout: int = 30,
     max_timeout: int = 300,
     output_limit: int = 51200,
-    job_mgr = None,
+    job_mgr=None,
     background: bool = False,
     env_extras: dict = None,
+    session_id: str = "",
+    sessions: dict = None,
 ) -> dict:
     """Execute a shell command with full validation.
     
@@ -28,12 +30,22 @@ def execute_command(
         job_mgr: JobManager instance for background execution
         background: If True, start as background job
         env_extras: Extra environment variables to pass to the command
+        session_id: Optional session ID to inherit working directory from
+        sessions: Active sessions dict (used with session_id)
         
     Returns:
         dict with keys: success, stdout, stderr, return_code, 
         (if background) also: job_id
     """
     import shlex
+    
+    # Resolve session working directory
+    if session_id and sessions:
+        session = sessions.get(session_id)
+        if session:
+            cwd = session.get('working_dir', cwd)
+        else:
+            return {'success': False, 'error': f'Session not found: {session_id}', 'return_code': -1}
     
     # Validate cwd
     if cwd:
