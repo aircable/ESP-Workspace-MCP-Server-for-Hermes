@@ -154,7 +154,7 @@ def git_diff(directory: str, allowed_roots: List[str], staged: bool = False,
             if file_path and d.b_path != file_path:
                 continue
             header = f"diff --git a/{d.b_path} b/{d.b_path}"
-            output_parts.append(f"{header}\n{d.diff.decode('utf-8', errors='replace')}")
+            output_parts.append(f"{header}\n{d.diff if isinstance(d.diff, str) else d.diff.decode('utf-8', errors='replace')}")
 
         if output_parts:
             lines.extend(output_parts)
