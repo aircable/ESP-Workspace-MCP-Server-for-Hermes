@@ -25,6 +25,10 @@ def create_server(settings: Settings) -> FastMCP:
     from esp_workspace_mcp.tools import search as search_tools
     from esp_workspace_mcp.tools import serial_tools as serial
     from esp_workspace_mcp.tools import diagnostics as diag
+    from esp_workspace_mcp.tools import phase4_tools as p4tools
+    from esp_workspace_mcp.tools import phase4_uart as p4uart
+    from esp_workspace_mcp.tools import phase4_symbols as p4sym
+    from esp_workspace_mcp.tools import phase4_debug as p4debug
     from esp_workspace_mcp.tools.session_tools import SessionManager
     from esp_workspace_mcp.utils.process import JobManager
 
@@ -620,6 +624,117 @@ def create_server(settings: Settings) -> FastMCP:
         return '\n'.join(lines)
 
     # ================================================================
+    # Phase 4.1: High-Level File Operations
+    # ================================================================
+
+    @mcp.tool()
+    def replace_text(path: str, search: str, replace: str, replace_all: bool = False) -> str:
+        """Find and replace text in a file (single-call read/modify/write).
+
+        Args:
+            path: Absolute path to the file
+            search: Text to find
+            replace: Replacement text
+            replace_all: If True, replace all occurrences (default: first only)
+        """
+        return p4tools.replace_text(path, search, replace, replace_all=replace_all, allowed_roots=roots)
+
+    @mcp.tool()
+    def patch_file(path: str, diff: str) -> str:
+        """Apply a unified diff to a file.
+
+        Args:
+            path: Absolute path to the file to patch
+            diff: Unified diff text
+        """
+        return p4tools.patch_file(path, diff, allowed_roots=roots)
+
+    # ================================================================
+    # Phase 4.2: Intelligent UART Monitor
+    # ================================================================
+
+    @mcp.tool()
+    def monitor_uart(port: str, baud: int = 115200, duration: float = 30, filter_pattern: str = "") -> str:
+        """Capture serial output from a UART port with optional filtering.
+
+        Args:
+            port: Serial port path (e.g. '/dev/ttyUSB0', '/dev/ttyACM0')
+            baud: Baud rate (default: 115200)
+            duration: Seconds to capture (max 120)
+            filter_pattern: Optional regex - only matching lines returned
+        """
+        return p4uart.monitor_uart(port, baud, duration, filter_pattern=filter_pattern, allowed_roots=roots)
+
+    @mcp.tool()
+    def decode_panic(output: str) -> str:
+        """Parse ESP32 panic handler output into structured analysis.
+
+        Extracts PC address, reset reason, backtrace, and known error patterns.
+
+        Args:
+            output: Raw serial output text containing a panic dump
+        """
+        return p4uart.decode_panic(output)
+
+    # ================================================================
+    # Phase 4.3: Symbol Indexing
+    # ================================================================
+
+    @mcp.tool()
+    def find_symbol(name: str, project_path: str) -> str:
+        """Locate the definition of a function, variable, or macro.
+
+        Tries ctags first, then clangd, then falls back to regex search.
+
+        Args:
+            name: Symbol name to find
+            project_path: Absolute path to project root
+        """
+        return p4sym.find_symbol(name, project_path, allowed_roots=roots)
+
+    @mcp.tool()
+    def find_references(symbol: str, project_path: str) -> str:
+        """Find all usages of a symbol in a project.
+
+        Args:
+            symbol: Symbol name to search for
+            project_path: Absolute path to project root
+        """
+        return p4sym.find_references(symbol, project_path, allowed_roots=roots)
+
+    # ================================================================
+    # Phase 4.4: Autonomous Debug Cycle
+    # ================================================================
+
+    @mcp.tool()
+    def run_debug_cycle(project_path: str, port: str, wish_product: str = "", target: str = "", flash: bool = True, monitor_duration: float = 15, timeout: int = 600) -> str:
+        """Run a complete debug cycle: build + flash + monitor + analyze.
+
+        The keystone tool for autonomous firmware development.
+
+        Args:
+            project_path: Absolute path to the ESP-IDF project
+            port: Serial port for flashing and monitoring
+            wish_product: Target hardware product (e.g. 'TargetS3')
+            target: Target chip (e.g. 'esp32s3'). Empty = use sdkconfig default.
+            flash: If True, flash the firmware (default: True)
+            monitor_duration: Seconds of serial capture after flash (default: 15)
+            timeout: Maximum seconds for the entire cycle (default: 600)
+        """
+        return p4debug.run_debug_cycle(
+            project_path, port,
+            wish_product=wish_product or settings.MCP_WISH_PRODUCT,
+            target=target,
+            flash=flash,
+            monitor_duration=monitor_duration,
+            eim_path=settings.MCP_EIM_PATH,
+            timeout=timeout,
+            allowed_roots=roots,
+        )
+
+
+
+
     # Resources
     # ================================================================
 
