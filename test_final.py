@@ -2,6 +2,7 @@
 import json, os, sys, tempfile, shutil, traceback, time
 
 PROJECT_ROOT = "/home/juergen/AIRcableLLC/ESP_SW/NEWEST/MCPserver"
+sys.path.insert(0, PROJECT_ROOT + "/.venv/lib/python3.14/site-packages")
 sys.path.insert(0, PROJECT_ROOT)
 
 ROOTS = ["/home/juergen/AIRcableLLC", "/tmp"]
