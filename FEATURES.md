@@ -18,7 +18,7 @@ All tools available through the `esp-workspace` MCP server, organized by capabil
 | `glob_search` | Find files matching a glob pattern (recursive) |
 
 ### Security
-All filesystem tools validate paths against configured allowed roots (`/home/juergen/AIRcableLLC`). Symlink resolution and path traversal prevention enforced. Requests to paths outside roots (e.g. `/etc/passwd`) are rejected.
+All filesystem tools validate paths against configured allowed roots (`/home/juergen/...`). Symlink resolution and path traversal prevention enforced. Requests to paths outside roots (e.g. `/etc/passwd`) are rejected.
 
 ---
 
@@ -70,9 +70,9 @@ Uses gitpython. All operations are sandboxed to allowed roots.
 | `serial_sessions_list` | List all open serial sessions |
 | `monitor_uart` | Capture serial output for a duration with optional regex filtering |
 
-### Detected Devices (example)
+### Connected Device
 ```
-/dev/ttyACM0  USB JTAG/serial debug unit  [VID:PID=303A:1001]
+/dev/ttyACM0  USB JTAG/serial debug unit  [VID:PID=303A:1001]  TargetS3
 ```
 
 ---
@@ -128,7 +128,7 @@ Sessions maintain working directory context for multi-step operations.
 
 ---
 
-## High-Level File Operations (Phase 4)
+## High-Level File Operations (Phase 4.1)
 
 | Tool | Description |
 |---|---|
@@ -137,7 +137,16 @@ Sessions maintain working directory context for multi-step operations.
 
 ---
 
-## Symbol Indexing (Phase 4)
+## Intelligent UART Monitor (Phase 4.2)
+
+| Tool | Description |
+|---|---|
+| `monitor_uart` | Capture serial output for N seconds with optional regex filter |
+| `decode_panic` | Parse panic output — extracts PC, backtrace, reset reason, pattern match |
+
+---
+
+## Symbol Indexing (Phase 4.3)
 
 | Tool | Description |
 |---|---|
@@ -146,7 +155,7 @@ Sessions maintain working directory context for multi-step operations.
 
 ---
 
-## Debug Cycle (Phase 4)
+## Autonomous Debug Cycle (Phase 4.4)
 
 | Tool | Description |
 |---|---|
@@ -159,23 +168,24 @@ Returns structured JSON with build results, flash status, captured serial output
 ## Architecture
 
 ```
-Client (Hermes)  <--SSE/HTTP-->  MCP Server (port 8765)
-                                    |
-                                    +-- Bearer auth middleware
-                                    +-- Starlette ASGI (sse + messages routing)
-                                    +-- FastMCP tool registry
-                                    |
-                                    +-- Filesystem tools   (sandboxed paths)
-                                    +-- Shell tools        (subprocess + job manager)
-                                    +-- Git tools          (gitpython)
-                                    +-- Search tools       (ripgrep fallback)
-                                    +-- Serial tools       (pyserial)
-                                    +-- ESP-IDF tools      (via eim)
-                                    +-- Diagnostics        (project parsing)
-                                    +-- Sessions           (working dir context)
-                                    +-- High-level ops     (replace, patch)
-                                    +-- Symbol indexing    (ctags/clangd/regex)
-                                    +-- Debug cycle        (build+flash+monitor)
+Client (Hermes/any MCP client)  <--SSE/HTTP-->  MCP Server (port 8765)
+                                                      |
+                                                      +-- Bearer auth middleware
+                                                      +-- Starlette ASGI routing
+                                                      +-- FastMCP tool registry (50 tools)
+                                                      |
+                                                      +-- Filesystem tools   (sandboxed paths)
+                                                      +-- Shell tools        (subprocess + job manager)
+                                                      +-- Git tools          (gitpython)
+                                                      +-- Search tools       (ripgrep fallback)
+                                                      +-- Serial tools       (pyserial)
+                                                      +-- ESP-IDF tools      (via eim)
+                                                      +-- Diagnostics        (project parsing, panic decoder)
+                                                      +-- Sessions           (working dir context)
+                                                      +-- High-level ops     (replace_text, patch_file)
+                                                      +-- Symbol indexing    (ctags/clangd/regex)
+                                                      +-- UART monitor       (capture + filter)
+                                                      +-- Debug cycle        (build+flash+monitor)
 ```
 
 ---
@@ -193,23 +203,58 @@ Server settings via environment variables or `.env` file:
 | `MCP_WISH_PRODUCT` | `""` | Default WISH_PRODUCT for builds |
 | `MCP_EIM_PATH` | `eim` | Path to eim executable |
 | `MCP_LOG_LEVEL` | `INFO` | Logging level |
+| `MCP_JOB_TTL_SECONDS` | `3600` | Job manager TTL |
+| `MCP_MAX_TIMEOUT` | `300` | Max command timeout |
+| `MCP_OUTPUT_LIMIT` | `10000` | Max output lines |
 
 ---
 
 ## Test Coverage
 
-Two test files exist:
+Three test suites exist:
 
 - **test_final.py** — 33 unit/integration tests covering all tool functions directly
+- **test_mcp_server.py** — 50 comprehensive tests across 8 groups: server registration, filesystem, git, Phase 4 tools, serial, ESP-IDF, diagnostics, search, and live ESP device
 - **test_esp_integration.py** — 22 integration tests exercising real ESP-IDF, hardware, and eim
 
-Both run on the dev host with:
+All tests pass (105 tests, 100% pass rate). Run on the dev host with:
 ```bash
 cd MCPserver
 .venv/bin/python test_final.py
+.venv/bin/python test_mcp_server.py
 .venv/bin/python test_esp_integration.py
 ```
 
+### Test Groups (test_mcp_server.py)
+
+| Group | Tests | Coverage |
+|---|---|---|
+| Server & Registration | 8 | Server creation, 50 tools registered, all 7 Phase 4 tools |
+| Filesystem & Security | 11 | CRUD ops, path traversal blocking, symlink safety |
+| Git (read-only) | 4 | status, diff, log, branch |
+| Phase 4 Tools | 12 | replace_text, patch_file, decode_panic (4 types), find_symbol, find_references |
+| Serial | 2 | Port listing, ESP device detection |
+| ESP-IDF & Diagnostics | 6 | version, project info, sdkconfig, build parser, devices |
+| Search | 2 | grep, find_files |
+| ESP Device | 2 | Device presence, 2-second UART monitor capture |
+
 ---
 
-*Auto-generated from PLAN.md and source code review, 2026-05-29*
+## Deployment
+
+The MCP server runs standalone. No SSH is required for normal operation.
+
+```bash
+# Start server
+python run_server.py                   # SSE mode on port 8765
+python run_server.py --stdio           # Stdio mode (for local clients)
+
+# With custom config
+python run_server.py --port 9000 --env-file /path/to/.env
+```
+
+SSH was only used during development for file deployment. The MCP server itself communicates via SSE/HTTP and has no SSH dependencies.
+
+---
+
+*Generated from source code review and test verification, 2026-05-29*

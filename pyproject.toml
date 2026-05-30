@@ -4,16 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esp-workspace-mcp"
-version = "0.1.0"
+version = "0.5.0"
 description = "Full autonomous embedded firmware workspace MCP server for ESP-IDF"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
+authors = [
+    {name = "AIRcable LLC"},
+]
+keywords = ["mcp", "esp-idf", "esp32", "firmware", "embedded", "ai-agent", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Embedded Systems",
+]
 dependencies = [
     "mcp>=1.0",
     "fastapi>=0.115",
     "uvicorn>=0.34",
     "pydantic>=2.0",
+    "pydantic-settings>=2.0",
     "gitpython>=3.1",
     "pyserial>=3.5",
     "python-dotenv>=1.0",
@@ -24,3 +38,16 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+
+[project.scripts]
+esp-workspace-mcp = "esp_workspace_mcp.cli:main"
+esp-workspace-mcp-configure = "esp_workspace_mcp.cli:cli_configure"
+esp-workspace-mcp-init = "esp_workspace_mcp.cli:cli_init"
+
+[project.urls]
+Homepage = "https://github.com/aircable/ESP-Workspace-MCP-Server-for-Hermes"
+Repository = "https://github.com/aircable/ESP-Workspace-MCP-Server-for-Hermes"
+Issues = "https://github.com/aircable/ESP-Workspace-MCP-Server-for-Hermes/issues"
+
+[tool.setuptools]
+packages = ["esp_workspace_mcp", "esp_workspace_mcp.tools", "esp_workspace_mcp.resources", "esp_workspace_mcp.utils"]
