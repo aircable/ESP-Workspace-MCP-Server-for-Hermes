@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
 
-class Settings(BaseSettings):
+class MCPSettings(BaseSettings):
     """Server settings loaded from environment / .env."""
 
     # Authentication
@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     @property
     def allowed_roots(self) -> List[str]:
         return [r.strip() for r in self.MCP_ALLOWED_ROOTS.split(",") if r.strip()]
+
+
+# Backward-compatible alias
+Settings = MCPSettings
 
 
 def load_settings(env_file: str = ".env") -> Settings:

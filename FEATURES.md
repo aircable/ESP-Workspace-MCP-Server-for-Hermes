@@ -2,20 +2,55 @@
 
 All tools available through the `esp-workspace` MCP server, organized by capability.
 
+## Architecture: Tool Categories
+
+Tools are organized into **plug-in categories** that can be enabled or disabled via configuration. This keeps the token context clean — an OpenMV developer doesn't need ESP-IDF flash tools, and vice versa.
+
+```
+esp_workspace_mcp/categories/
+├── __init__.py          # CategoryRegistry — auto-discovers categories
+├── base.py              # ToolCategory ABC
+├── filesystem.py        # read_file, write_file, copy_file, list_dir, etc.
+├── shell.py             # run_command, start_process, jobs
+├── git.py               # git_status, git_commit, git_branch, etc.
+├── esp_idf.py           # build_project, flash_project, idf_size, etc.
+├── serial.py            # serial_open, serial_read, serial_write, etc.
+├── diagnostics.py       # get_project_info, get_connected_devices
+├── sessions.py          # create_session, destroy_session, list_sessions
+├── ai_native.py         # decode_panic, monitor_uart, run_debug_cycle, find_symbol
+└── openmv.py            # OpenMV camera development (stub — enable when needed)
+```
+
+### Enabling Categories
+
+In `~/.config/esp-workspace/config.toml`:
+```toml
+[categories]
+enabled = ["filesystem", "shell", "git", "esp_idf", "serial"]
+# "openmv" not listed = not loaded = invisible to LLM
+```
+
+Adding a new category (e.g. OpenMV): create `categories/openmv.py` and add `"openmv"` to the enabled list. No other files change.
+
 ---
 
 ## Filesystem Tools
 
 | Tool | Description |
 |---|---|
-| `read_file` | Read a text file with offset/limit pagination |
+| `read_file` | Read a text file with 1-indexed offset/limit pagination |
+| `read_file_base64` | Read a file and return base64-encoded content (for binary files) |
 | `write_file` | Write content to a file (creates parent dirs) |
+| `write_file_base64` | Write base64-encoded content to a file (for binary files) |
 | `append_file` | Append content to an existing file |
 | `list_dir` | List directory entries with type and size |
 | `create_dir` | Create a directory recursively |
 | `delete_path` | Delete a file or empty directory |
 | `file_stat` | Get file/directory metadata (size, permissions, mtime) |
 | `glob_search` | Find files matching a glob pattern (recursive) |
+| `copy_file` | Copy a file (source and destination must be within allowed roots) |
+| `copy_dir` | Copy a directory recursively |
+| `move_path` | Move/rename a file or directory |
 
 ### Security
 All filesystem tools validate paths against configured allowed roots (`/home/juergen/...`). Symlink resolution and path traversal prevention enforced. Requests to paths outside roots (e.g. `/etc/passwd`) are rejected.
@@ -172,27 +207,41 @@ Client (Hermes/any MCP client)  <--SSE/HTTP-->  MCP Server (port 8765)
                                                       |
                                                       +-- Bearer auth middleware
                                                       +-- Starlette ASGI routing
-                                                      +-- FastMCP tool registry (50 tools)
+                                                      +-- FastMCP tool registry
                                                       |
-                                                      +-- Filesystem tools   (sandboxed paths)
-                                                      +-- Shell tools        (subprocess + job manager)
-                                                      +-- Git tools          (gitpython)
-                                                      +-- Search tools       (ripgrep fallback)
-                                                      +-- Serial tools       (pyserial)
-                                                      +-- ESP-IDF tools      (via eim)
-                                                      +-- Diagnostics        (project parsing, panic decoder)
-                                                      +-- Sessions           (working dir context)
-                                                      +-- High-level ops     (replace_text, patch_file)
-                                                      +-- Symbol indexing    (ctags/clangd/regex)
-                                                      +-- UART monitor       (capture + filter)
-                                                      +-- Debug cycle        (build+flash+monitor)
+                                                      +-- CategoryRegistry (plug-in system)
+                                                      |     |
+                                                      |     +-- filesystem   (13 tools)
+                                                      |     +-- shell        (5 tools)
+                                                      |     +-- git          (5 tools)
+                                                      |     +-- search       (2 tools)
+                                                      |     +-- serial       (6 tools)
+                                                      |     +-- esp_idf      (10 tools)
+                                                      |     +-- diagnostics  (3 tools)
+                                                      |     +-- sessions     (3 tools)
+                                                      |     +-- ai_native    (5 tools)
+                                                      |     +-- openmv       (4 tools, stub)
+                                                      |
+                                                      +-- Legacy fallback (tools/ directory)
+                                                            Used when categories/ is not available
 ```
+
+### Category Loading
+
+At startup, `server.py` checks for the `categories/` directory:
+- **With categories**: Only enabled categories are loaded (config-driven)
+- **Without categories**: Falls back to legacy flat tool loading from `tools/` directory
+- **Mixed**: Categories take precedence; legacy tools fill gaps
+
+This means the server works with OR WITHOUT the category system — backward compatible.
 
 ---
 
 ## Configuration
 
-Server settings via environment variables or `.env` file:
+Server settings via environment variables, `.env` file, or `config.toml`:
+
+### Environment Variables (.env)
 
 | Variable | Default | Description |
 |---|---|---|
@@ -205,7 +254,40 @@ Server settings via environment variables or `.env` file:
 | `MCP_LOG_LEVEL` | `INFO` | Logging level |
 | `MCP_JOB_TTL_SECONDS` | `3600` | Job manager TTL |
 | `MCP_MAX_TIMEOUT` | `300` | Max command timeout |
-| `MCP_OUTPUT_LIMIT` | `10000` | Max output lines |
+| `MCP_OUTPUT_LIMIT` | `51200` | Max output (50 KB) |
+
+### TOML Configuration (categories)
+
+`~/.config/esp-workspace/config.toml`:
+```toml
+[server]
+name = "esp-workspace"
+host = "0.0.0.0"
+port = 8765
+log_level = "INFO"
+
+[auth]
+token = "your-secret-token"
+
+[filesystem]
+allowed_roots = ["/home/juergen/AIRcableLLC"]
+
+[esp_idf]
+wish_product = "TargetS3"
+eim_path = "eim"
+
+[shell]
+default_timeout = 30
+max_timeout = 300
+output_limit = 51200
+
+[jobs]
+ttl_seconds = 3600
+
+[categories]
+enabled = ["filesystem", "shell", "git", "esp_idf", "serial", "diagnostics", "sessions", "ai_native"]
+# "openmv" not listed = not loaded
+```
 
 ---
 
@@ -253,7 +335,13 @@ python run_server.py --stdio           # Stdio mode (for local clients)
 python run_server.py --port 9000 --env-file /path/to/.env
 ```
 
-SSH was only used during development for file deployment. The MCP server itself communicates via SSE/HTTP and has no SSH dependencies.
+### PyPI Installation
+
+```bash
+pip install esp-workspace-mcp
+esp-workspace-mcp configure    # Interactive setup
+esp-workspace-mcp start        # Start the server
+```
 
 ---
 

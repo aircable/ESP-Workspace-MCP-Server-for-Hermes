@@ -1,0 +1,59 @@
+# esp-workspace MCP server configuration
+#
+# Place this file at ~/.config/esp-workspace/config.toml
+# Or specify a custom path with: esp-workspace-mcp start --config /path/to/config.toml
+
+[server]
+name = "esp-workspace"
+host = "0.0.0.0"
+port = 8765
+
+# Bearer token for MCP client authentication
+# Generate one with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+auth_token = "YOUR_TOKEN_HERE"
+
+# ── Tool Categories ──────────────────────────────────────────────────────────
+# Explicitly enable only the categories you need.
+# Available categories: filesystem, shell, git, search, serial, diagnostics,
+#                       sessions, esp_idf, build_diagnostics, ai_native, openmv
+#
+# If omitted, ALL categories are loaded (backward-compatible default).
+# Comment out to enable everything.
+
+[categories]
+enabled = [
+    "filesystem",
+    "shell",
+    "git",
+    "esp_idf",
+    "serial",
+    "diagnostics",
+    "sessions",
+    # "ai_native",      # uncomment for decode_panic, monitor_uart, etc.
+    # "openmv",         # uncomment for OpenMV camera development
+]
+
+# ── Filesystem ───────────────────────────────────────────────────────────────
+
+[filesystem]
+allowed_roots = [
+    "/home/user/projects",
+]
+
+# ── Serial ───────────────────────────────────────────────────────────────────
+
+[serial]
+default_port = "/dev/ttyACM0"
+default_baud = 115200
+
+# ── ESP-IDF ──────────────────────────────────────────────────────────────────
+
+[esp_idf]
+eim_path = "/opt/esp/tools/espressif-ide-manager/eim"
+idf_path = "/opt/esp/esp-idf"
+default_target = "esp32"
+
+# ── OpenMV (example future category) ────────────────────────────────────────
+
+[openmv]
+projects_dir = "/home/user/openmv-projects"
